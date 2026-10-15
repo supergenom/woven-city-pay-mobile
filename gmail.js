@@ -63,26 +63,53 @@ const Gmail = (() => {
 
   const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+  // Gmail API の上限は 1ユーザー 15,000 単位/分（messages.get は 1回 5単位 ＝ 毎秒50回まで）。
+  // 余裕を見てリクエストの開始間隔を空け、毎秒約16回（上限の約1/3）に抑える
+  const MIN_INTERVAL = 60;
+  let nextSlot = 0;
+  async function throttle() {
+    const now = Date.now();
+    const wait = Math.max(0, nextSlot - now);
+    nextSlot = Math.max(now, nextSlot) + MIN_INTERVAL;
+    if (wait) await sleep(wait);
+  }
+
+  // 403 でも、利用量の上限（rateLimitExceeded / Quota exceeded）なら待てば回復する
+  function isRateLimit(status, data) {
+    if (status === 429) return true;
+    if (status !== 403 || !data.error) return false;
+    const reasons = (data.error.errors || []).map((e) => e.reason);
+    return reasons.some((r) => /rateLimit|quota/i.test(r || "")) || /quota|rate limit/i.test(data.error.message || "");
+  }
+
+  let onWait = null; // 上限待ちのときに画面へ知らせる
+
   async function call(path, params = {}) {
     const url = new URL(API + path);
     for (const [k, v] of Object.entries(params)) if (v !== undefined) url.searchParams.set(k, v);
     for (let attempt = 0; ; attempt++) {
       if (!token) throw new Error("ログインしてください");
+      await throttle();
       const res = await fetch(url, { headers: { Authorization: "Bearer " + token } });
       if (res.status === 401) {
         token = null;
         throw new Error("ログインの有効期限が切れました。もう一度「更新」を押してください");
       }
-      // 混雑時は少し待って再試行
-      if ((res.status === 429 || res.status >= 500) && attempt < 3) {
+      if (res.ok) return res.json();
+      const data = await res.json().catch(() => ({}));
+      // 上限に達したら 1分の枠が空くまで待って再試行（最大4回）。サーバー側の一時的な不調も再試行
+      if (isRateLimit(res.status, data) && attempt < 4) {
+        const sec = Number(res.headers.get("Retry-After")) || 15 * (attempt + 1);
+        nextSlot = Math.max(nextSlot, Date.now() + sec * 1000); // 他の並列処理もまとめて待たせる
+        if (onWait) onWait(sec);
+        await sleep(sec * 1000);
+        continue;
+      }
+      if (res.status >= 500 && attempt < 3) {
         await sleep(1000 * 2 ** attempt);
         continue;
       }
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(`Gmail の読み取りに失敗しました（${res.status}: ${(data.error && data.error.message) || res.statusText}）`);
-      }
-      return res.json();
+      throw new Error(`Gmail の読み取りに失敗しました（${res.status}: ${(data.error && data.error.message) || res.statusText}）`);
     }
   }
 
@@ -92,7 +119,16 @@ const Gmail = (() => {
 
   // knownIds にない「Woven City Pay」メールを取得して取引に変換する。
   // 途中で失敗したときは、それまでに読めた取引を err.partial に入れて投げる
-  async function fetchNew(knownIds, onProgress) {
+  async function fetchNew(knownIds, onProgress, onWaiting) {
+    onWait = onWaiting || null;
+    try {
+      return await fetchNewInner(knownIds, onProgress);
+    } finally {
+      onWait = null;
+    }
+  }
+
+  async function fetchNewInner(knownIds, onProgress) {
     const ids = [];
     let pageToken;
     do {

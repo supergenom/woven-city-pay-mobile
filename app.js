@@ -1,6 +1,6 @@
 "use strict";
 
-const APP_VERSION = "0.1.0";
+const APP_VERSION = "0.1.1";
 
 // ---------------------------------------------------------------- state
 const state = {
@@ -123,7 +123,8 @@ async function refresh({ selectAccount = false, msgEl = null } = {}) {
     let added = [], error = null;
     try {
       added = await Gmail.fetchNew(new Set(saved.map((t) => t.id)),
-        (done, total) => say("Gmail から取得中…", `${done} / ${total} 通`));
+        (done, total) => say("Gmail から取得中…", `${done} / ${total} 通`),
+        (sec) => say("Gmail の利用上限のため待機中…", `${sec}秒後に再開`));
     } catch (e) {
       added = e.partial || [];
       error = e;
