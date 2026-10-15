@@ -1,0 +1,157 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self';
+    script-src 'self' https://accounts.google.com/gsi/client;
+    frame-src https://accounts.google.com/gsi/;
+    connect-src 'self' https://accounts.google.com/gsi/ https://gmail.googleapis.com https://oauth2.googleapis.com;
+    style-src 'self' 'unsafe-inline' https://accounts.google.com/gsi/style;
+    img-src 'self' data:; base-uri 'none'; object-src 'none'">
+  <title>My Woven City Payment</title>
+  <meta name="theme-color" content="#000000">
+  <link rel="manifest" href="manifest.json">
+  <link rel="icon" href="icon-256.png">
+  <link rel="apple-touch-icon" href="icon-256.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <header class="topbar">
+    <div class="title-row">
+      <h1 class="title">My Woven City Payment</h1>
+      <button id="settingsBtn" class="icon-btn" type="button" aria-label="設定" title="設定">⚙</button>
+    </div>
+    <div class="actions" id="actions">
+      <span id="status" class="status"></span>
+      <button id="refreshBtn" class="btn" type="button">更新</button>
+      <div class="dropdown">
+        <button id="listBtn" class="btn" type="button" aria-haspopup="true" aria-expanded="false">一覧表示 ▾</button>
+        <div id="listMenu" class="menu" role="menu" hidden>
+          <button type="button" role="menuitem" data-mode="all">全表示</button>
+          <button type="button" role="menuitem" data-mode="month">月表示</button>
+          <button type="button" role="menuitem" data-mode="week">週表示</button>
+          <button type="button" role="menuitem" data-mode="store">ストア別</button>
+        </div>
+      </div>
+      <button id="csvBtn" class="btn" type="button">CSV出力</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Calendar -->
+    <section id="calendarView" hidden>
+      <div class="nav">
+        <button class="arrow" id="calPrev" type="button" aria-label="前の月">◀</button>
+        <h2 id="calLabel"></h2>
+        <button class="arrow" id="calNext" type="button" aria-label="次の月">▶</button>
+      </div>
+      <div class="summary" id="calSummary"></div>
+      <div class="calendar">
+        <div class="weekdays">
+          <div>月</div><div>火</div><div>水</div><div>木</div><div>金</div><div class="sat">土</div><div class="sun">日</div>
+        </div>
+        <div class="grid" id="calGrid"></div>
+      </div>
+      <div class="legend" id="legend"></div>
+    </section>
+
+    <!-- List -->
+    <section id="listView" hidden>
+      <div class="nav">
+        <button class="arrow" id="listPrev" type="button" aria-label="前へ">◀</button>
+        <h2 id="listLabel"></h2>
+        <button class="arrow" id="listNext" type="button" aria-label="次へ">▶</button>
+      </div>
+      <div class="summary" id="listSummary"></div>
+      <div class="table-wrap">
+        <table class="list">
+          <thead><tr><th>取引日時</th><th>種別</th><th>ストア名</th><th class="num">金額</th></tr></thead>
+          <tbody id="listBody"></tbody>
+        </table>
+      </div>
+      <p class="empty" id="listEmpty" hidden>該当する取引はありません</p>
+      <div class="back"><button class="btn back-btn" type="button">カレンダーに戻る</button></div>
+    </section>
+
+    <!-- Settings / first-run setup -->
+    <section id="settingsView" class="settings" hidden>
+      <div id="setupIntro" class="card intro" hidden>
+        <h2>はじめに</h2>
+        <p>Gmail に届く「【Woven City Pay】」のお知らせメールを読み取り、支払いとチャージをカレンダーで表示します。
+          まず、Google アカウントでログインしてください。</p>
+      </div>
+
+      <div class="card">
+        <h2>Google アカウント</h2>
+        <p id="accountState"></p>
+        <ul class="note-list">
+          <li>Gmail は<b>読み取りのみ</b>です。メールの変更・送信はしません。</li>
+          <li>取り込んだ取引データは<b>このスマホの中だけ</b>に保存され、外部には送信しません。</li>
+          <li>ログイン時に「Google はこのアプリを確認していません」と表示されたら、「詳細」→「…（安全ではないページ）に移動」を選んでください。</li>
+          <li>ログインは約1時間で切れます。その後「更新」を押すと、もう一度ログインを求められます。</li>
+        </ul>
+        <p class="note" id="noClientId" hidden>この環境ではクライアント ID が未設定のためログインできません。
+          <a href="?demo">デモ表示</a>で画面を試せます。</p>
+        <div class="form-actions">
+          <button class="btn primary" type="button" id="loginBtn">Google でログインしてメールを取り込む</button>
+        </div>
+        <p class="message" id="accountMsg" role="status"></p>
+      </div>
+
+      <div class="card" id="groupCard">
+        <h2>ストア名のまとめ</h2>
+        <p class="note">同じお店なのに名前が分かれている場合（例：en-1、en-2 → en-）、1つにまとめて集計できます。</p>
+        <ul class="groups" id="groupList"></ul>
+        <form id="groupForm" class="form">
+          <label>まとめた後の名前
+            <input id="groupName" type="text" required placeholder="例：en-">
+          </label>
+          <fieldset>
+            <legend>まとめるストアを選択</legend>
+            <div class="store-checks" id="storeChecks"></div>
+          </fieldset>
+          <div class="form-actions">
+            <button class="btn" type="submit">まとめを追加</button>
+          </div>
+          <p class="message" id="groupMsg" role="status"></p>
+        </form>
+      </div>
+
+      <div class="card" id="logoutCard">
+        <h2>ログアウト</h2>
+        <p class="note">Gmail へのアクセス許可を取り消し、このスマホに保存した取引データと設定をすべて消去します。</p>
+        <div class="form-actions">
+          <button class="btn" type="button" id="logoutBtn">ログアウトしてデータを消去</button>
+        </div>
+      </div>
+
+      <div class="card about">
+        <h2>このアプリについて</h2>
+        <p class="note">My Woven City Payment（スマホ版） <span id="appVersion"></span><br>
+          Woven City Pay の公式アプリではありません。個人が作成した非公式の家計簿ツールです。</p>
+      </div>
+
+      <div class="back" id="settingsBack"><button class="btn back-btn" type="button">カレンダーに戻る</button></div>
+    </section>
+  </main>
+
+  <dialog id="detail">
+    <h3>詳細情報</h3>
+    <dl>
+      <dt>取引日時</dt><dd id="dDate"></dd>
+      <dt>ストア名</dt><dd id="dStore"></dd>
+      <dt>利用金額</dt><dd id="dAmount"></dd>
+    </dl>
+    <form method="dialog"><button class="btn" type="submit">閉じる</button></form>
+  </dialog>
+
+  <script src="https://accounts.google.com/gsi/client" async></script>
+  <script src="config.js"></script>
+  <script src="parser.js"></script>
+  <script src="store.js"></script>
+  <script src="gmail.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
